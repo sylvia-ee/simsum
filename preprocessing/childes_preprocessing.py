@@ -21,7 +21,4 @@ def childes_cleaner(childes_df, language_column="stem", identifier_col="id"):
     return id_token_dict
 
 
-# counting methods
-# 1. exact matches
-# 2. exact matches and grammatical forms 
-# 3. 
+# counting methods on lists of tokens, where each list represents one transcript

@@ -11,60 +11,221 @@ import inflect
 grammar_machine = inflect.engine()
 
 
-# ------------- 
-# FIRST PASS
-# ------------- 
-
-def manual_exclusions(mcdi_ibi_df, word_col="english_gloss", **kwargs):
-
-    """ removes rows from mcdi item-by-item dataframe via explicit user-defined criteria 
-    :param mcdi_ibi_df: pd dataframe of mcdi item-by-item data
-    :param word_col: str of df column name containing the word
-    :param **kwargs: not used here, for call in "merge_mcdi_dict_into_mcdi_df" function
-    :return: pd datframe of mcdi item-by-item data with exclusions applied
+def mcdi_ibi_setup(raw_mcdi_df, 
+                   orig_base="english_gloss",
+                   base_col="base", 
+                   cat_col="category",
+                   item_id="item_id",
+                   orig_sample_prod_col="24",
+                   sample_prod_col="sample_prod_col"):
+    
     """
-    # TODO: need to make this more flexible to accept both programmatic rules and .csvs
+    adds and renames columns to mcdi item-by-item df to denote mcdi inclusions and exclusions
 
-    # remove proper nouns 
-    name_mask = mcdi_ibi_df[word_col].str.endswith(" name")
-    mcdi_ibi_df.loc[name_mask, 'excl_reason'] = "ends in ' name'"
+    :param raw_mcdi_df: pd df of original mcdi item-by-item data, assuming at minimum cols for item id, category, production, word
+    :param orig_base: str of original dataset column label for word from original df
+    :param base_col: str of renamed column label for word for new df (we rename this to store the proper "cleaned" version of each word)
+    :param cat_col: str of column for category from original df (we assume you won't change this)
+    :param item_id: str of column for item id from original df (we assume you won't change this)
+    :param orig_sample_prod_col: str of column name for sample production column from original df (i.e. average production for this word across kids) (we assume you change this)
+    :param sample_prod_col: str of column for sample production column for new df 
+    """
 
-    return mcdi_ibi_df
+    mcdi_ibi = raw_mcdi_df.copy()
 
-def exclude_nonnouns(
+    mcdi_ibi[base_col] = mcdi_ibi[orig_base].astype(str).str.lower()
+    mcdi_ibi[cat_col] = mcdi_ibi[cat_col].astype(str).str.lower()
+    mcdi_ibi[item_id] = mcdi_ibi[item_id].astype(str).str.lower().astype("category")
+    mcdi_ibi[sample_prod_col] = mcdi_ibi[orig_sample_prod_col].astype(float)
+
+    mcdi_ibi = mcdi_ibi.drop_duplicates()
+
+    mcdi_ibi['alt'] = None
+    mcdi_ibi['alt_origin'] = None
+    mcdi_ibi['excl_reason'] = None
+
+    return mcdi_ibi
+
+def exclude_cats(
     mcdi_ibi_df,
-    nonnoun_cats={
-        "games_routines", "action_words", "descriptive_words", "time_words", "locations",
-        "descriptive_verbs", "pronouns", "helping_verbs", "sounds",
-        "quantifiers", "connecting_words", "NA", "question_words"
-    },
-    **kwargs
+    csv_path,
+    df_category_col="category",
+    csv_category_col="category",
+    csv_reason_col="excl_reason"
 ):
+    """
+    writes exclusion reason to exclusion column for mcdi categories we want to exclude
 
-    """ removes all rows containing non-nouns using word categories from mcdi item-by-item dataframe 
-    :param mcdi_ibi_df: pd dataframe of mcdi item-by-item data
-    :param nonnoun_cats: set of all categories denoting non-nouns, to be excluded. default exclusions defined.
-    :param **kwargs: not used here (redundant to nonnoun_cats), for call in "merge_mcdi_dict_into_mcdi_df" function
-    :return: pd dataframe of mcdi item-by-item data with all rows in excluded categories removed
+    :param mcdi_ibi_df: pd df of mcdi item-by-item data
+    :param csv_path: path to CSV containing categories to exclude
+    :param df_category_col: str for col in mcdi_ibi_df with category labels to exclude by
+    :param csv_category_col: str for col in CSV containing categories to exclude
+    :param csv_reason_col: str for col in CSV specifying exclusion reason 
+    :return: pd df with excl_reason column filled where applicable
     """
 
-    nonnoun_cats = set(kwargs.get("nonnoun_cats", nonnoun_cats))
+    excl_df = pd.read_csv(csv_path)
 
-    mask = mcdi_ibi_df['category'].isin(nonnoun_cats)
-    mcdi_ibi_df.loc[mask, 'excl_reason'] = "non-noun category"
+    excl_df[csv_category_col] = excl_df[csv_category_col].astype(str).str.lower()
+    mcdi_ibi_df[df_category_col] = mcdi_ibi_df[df_category_col].astype(str).str.lower()
+
+    excl_map = dict(zip(excl_df[csv_category_col], excl_df[csv_reason_col]))
+
+    mask = mcdi_ibi_df[df_category_col].isin(excl_map.keys())
+
+    mcdi_ibi_df.loc[
+        mask & mcdi_ibi_df["excl_reason"].isna(),
+        "excl_reason"
+    ] = mcdi_ibi_df.loc[
+        mask & mcdi_ibi_df["excl_reason"].isna(),
+        df_category_col
+    ].map(excl_map)
 
     return mcdi_ibi_df
 
-def strip_syntax(mcdi_ibi_df, word_col="english_gloss", **kwargs):
 
-    """ reformats special notation and syntax surrounding words to faciliate interpretation of each word as a single token downstream 
-    :param mcdi_ibi_df: pd dataframe of mcdi item-by-item data
-    :param word_col: str of df column name containing the word to be reformatted
-    :param **kwargs: not used here, for call in "merge_mcdi_dict_into_mcdi_df" function
-    :return: pd df with each word stripped of special notation and syntax, and additional rows for acceptable "alternative" forms of each word. 
-    see additional functions in comments for specific details.
+def exclude_proper_nouns(
+    mcdi_ibi_df,
+    base_col="base",
+    reason_col="excl_reason"
+):
+    """
+    writes exclusion reason "proper noun" to exclusion column to denote proper nouns we want to exclude
+    primary use via call in exclude_words 
+
+    :param mcdi_ibi_df: pd df of mcdi item-by-item data
+    :param base_col: str for col in mcdi_ibi df to check for exclusions
+    :param reason_col: str for col in mcdi_ibi df specifying exclusion reason
     """
 
+    mask = mcdi_ibi_df[base_col].str.endswith(" name", na=False)
+
+    mcdi_ibi_df.loc[
+        mask & mcdi_ibi_df[reason_col].isna(),
+        reason_col
+    ] = "proper noun"
+
+    return mcdi_ibi_df
+
+
+def exclude_via_csv(
+    mcdi_ibi_df,
+    path2csv,
+    df_base_col="base",
+    df_alt_col="alt",
+    csv_base_col="base",
+    csv_alt_col="alt",
+    csv_reason_col="excl_reason"
+):
+    """
+    writes exclusions from separate CSV with cols: base, alt, excl_reason denoting exclusion to mcdi_ibi df 
+    - base filled, alt blank: exclude all rows with that base
+    - base blank, alt filled: exclude all rows with that alt
+    - both filled: exclude exact match
+
+    :param mcdi_ibi_df: pd df of mcdi item-by-item data
+    :param path2csv: str for path to csv where exclusions are specified
+    :param df_base_col: str for name of base col in mcdi_ibi_df
+    :param df_alt_col: str for name of alt col in mcdi_ibi_df
+    :param csv_base_col: str for name of base col in CSV
+    :param csv_alt_col: str for name of alt col in CSV
+    :param csv_reason_col: str for name of excl_reason col in CSV
+    """
+
+    excl_df = pd.read_csv(path2csv)
+
+    for _, row in excl_df.iterrows():
+        base = row[csv_base_col]
+        alt = row[csv_alt_col]
+        reason = row[csv_reason_col]
+
+        if pd.notna(base) and pd.isna(alt):
+            mask = mcdi_ibi_df[df_base_col] == base
+
+        elif pd.notna(alt) and pd.isna(base):
+            mask = mcdi_ibi_df[df_alt_col] == alt
+
+        elif pd.notna(base) and pd.notna(alt):
+            mask = (
+                (mcdi_ibi_df[df_base_col] == base) &
+                (mcdi_ibi_df[df_alt_col] == alt)
+            )
+        else:
+            continue
+
+        mcdi_ibi_df.loc[
+            mask & mcdi_ibi_df["excl_reason"].isna(),
+            "excl_reason"
+        ] = reason
+
+    return mcdi_ibi_df
+
+
+def exclude_words(
+    mcdi_ibi_df,
+    exclusion_funcs=None,
+    csv_paths=None,
+    base_col="base",
+    df_alt_col="alt",
+    csv_base_col="base",
+    csv_alt_col="alt",
+    csv_reason_col="excl_reason"
+):
+    #TODO: modify this function to accept **kwargs in case functions passed want arguments 
+
+    """
+    writes exclusions from exclusion functions and CSV-based exclusions to mcdi item-by-item dataframe 
+    designed this way so you only call one function to write all desired word-level exclusions for mcdi_ibi.
+
+    :param mcdi_ibi_df: pd df of mcdi item-by-item data
+    :exclusion_funcs: list of function objs for functions you want to run to perform exclusion
+    :csv_paths: list of str csv paths for exclusions csvs you want to specify exclusion from (see exclude_via_csv for assumptions)
+    :base_col: str for base column in mcdi item-by-item data
+    :df_alt_col: str for alt column in mcdi item-by-item data
+    :csv_base_col: str for base column in exclusion data csv 
+    :csv_alt_col: str for alt col in exclusion data csv
+    :csv_reason_col: str for excl_reason in exclusion data csv specifying exclusion reason 
+
+    """
+
+    if exclusion_funcs is None:
+        exclusion_funcs = []
+
+    if csv_paths is None:
+        csv_paths = []
+
+    for func in exclusion_funcs:
+        mcdi_ibi_df = func(mcdi_ibi_df, base_col=base_col)
+
+    for path in csv_paths:
+        mcdi_ibi_df = exclude_via_csv(
+            mcdi_ibi_df,
+            path2csv=path,
+            df_base_col=base_col,
+            df_alt_col=df_alt_col,
+            csv_base_col=csv_base_col,
+            csv_alt_col=csv_alt_col,
+            csv_reason_col=csv_reason_col
+        )
+
+    return mcdi_ibi_df
+
+
+def strip_syntax(mcdi_ibi_df, 
+                 base_col="base",
+                 alt_col="alt",
+                 alt_origin_col="alt_origin"):
+    
+    """
+    strips special mcdi-word notation such as () and * at the end of words to enable downstream token-level analysis
+    see additional comments inside function for specific details 
+
+    :param mcdi_ibi_df: pd dataframe of mcdi item-by-item data
+    :param base_col: str of mcdi column name containing the word to be reformatted (this should be base bc base has been lowercase-normed in setup)
+    :param alt_col: str of mcdi column name containing the alt column to write the reformatted word to
+    :param alt_origin_col: str of mcdi column name describing where the processed alternative form of the word "appeared" from
+    """
+     
     # search for cases in col uni_lemma and strip using regex.
     # word* -> word
     # word () -> word
@@ -74,17 +235,12 @@ def strip_syntax(mcdi_ibi_df, word_col="english_gloss", **kwargs):
     # word/word () -> 2 word alt forms
     # word/word ()* -> 2 word alt forms
 
-    # store as {original form: [stripped version],
-    #           original form: [stripped version, stripped version]}
-
-    # generate df, where each row has an original form in col uni_lemma
-    # and each row has one of the stripped versions in col alt_forms
     # e.g. bottom/buttocks returns two rows, 1st row as bottom/buttocks and bottom
     #                                        2nd row as bottom/buttocks and buttocks
 
     stripped_dict = {}
 
-    for base_wd in mcdi_ibi_df[word_col]:
+    for base_wd in mcdi_ibi_df[base_col]:
         cleaned = re.sub(r"\*", "", base_wd).strip()
         alt_no_sense = re.sub(r"\s*\([^)]*\)\s*", "", cleaned).strip()
         alt_forms = [w.strip() for w in alt_no_sense.split('/') if w.strip()]
@@ -93,15 +249,20 @@ def strip_syntax(mcdi_ibi_df, word_col="english_gloss", **kwargs):
     new_rows = []
     for base_wd, forms in stripped_dict.items():
         for f in forms:
-            new_rows.append({word_col: base_wd, 'alt_forms': f})
+            new_rows.append({
+                base_col: base_wd,
+                alt_col: f,
+                alt_origin_col: 'syntax'
+            })
 
     alt_form_rows = pd.DataFrame(new_rows)
-    mcdi_ibi_df_no_alt = mcdi_ibi_df.drop(columns=['alt_forms'], errors='ignore')
+    mcdi_ibi_df_no_alt = mcdi_ibi_df.drop(columns=[alt_col, alt_origin_col], errors='ignore')
     syntax_cleaned_mcdi_ibi_df = mcdi_ibi_df_no_alt.merge(
-        alt_form_rows, on=word_col, how='outer'
+        alt_form_rows, on=base_col, how='outer'
     )
 
     return syntax_cleaned_mcdi_ibi_df
+
 
 def pp_checker(mcdi_ibi_df_old, mcdi_ibi_df_new, word_col_ibi="english_gloss"):
 
@@ -115,68 +276,6 @@ def pp_checker(mcdi_ibi_df_old, mcdi_ibi_df_new, word_col_ibi="english_gloss"):
     not_shared_wds = unq_wds_old ^ unq_wds_new
     if len(not_shared_wds) > 0:
         warnings.warn(f"{not_shared_wds} are not in both dfs")
-
-
-def mcdi_cleaner(mcdi_ibi_df, word_col="english_gloss", skip_list=None, func_kwargs=None):
-
-    """ performs all first-pass preprocessing operations for the mcdi item-by-item dataframe.
-    :param mcdi_ibi_df: df with at minimum a column for the word and its category
-    :param skip_list: specify a list of strs, with strs specifying cleaning operations you don't want to perform.
-        "manual_exclusions" skips any manual exclusions you specified.
-        "exclude_nonnouns" skips filling in the excl. column using non-noun cats.
-        "strip_syntax" skips cleaning word ()*, word (), word*, word/word to just "word".
-    :param func_kwargs: dict mapping function name -> dict of kwargs to pass into that function
-    :return: df with all original words/data, but extra columns for
-        excl_reason: specifying why this row should be excluded
-        alt_forms: an alternative form of the word that counts as an instance of that word
-            ex. if the base form is "chicken (food)", an accepted alt form is "chicken"
-            note that each alternative form gets it own row. so if "chicken (food)" can be
-            both "chicken" and "chickens", each one gets its own row.
-    """
-
-    # order of funcs in this dict matters b/c performed in order
-    # ops_funcs_dict should be all potential preprocessing ops,
-    # REGARDLESS of whether they were used.
-    ops_funcs_dict = {
-        "manual_exclusions": manual_exclusions,
-        "exclude_nonnouns": exclude_nonnouns,
-        "strip_syntax": strip_syntax
-    }
-
-    if skip_list is None:
-        skip_list = []
-
-    if func_kwargs is None:
-        func_kwargs = {}
-
-    # copy the dataframe to be processed
-    mcdi_ibi_df_pp = mcdi_ibi_df.copy() 
-
-    # force all relevant strings into lowercase and drop exact duplicate rows
-    mcdi_ibi_df_pp[word_col] = mcdi_ibi_df_pp[word_col].astype(str).str.lower()
-    mcdi_ibi_df_pp['category'] = mcdi_ibi_df_pp['category'].astype(str).str.lower()
-    mcdi_ibi_df_pp = mcdi_ibi_df_pp.drop_duplicates()
-
-    # initializes empty columns in dataframe
-    mcdi_ibi_df_pp['alt_forms'] = None
-    mcdi_ibi_df_pp['excl_reason'] = None
-
-    # for each function in the optional functions dictionary,
-    # if the user hasn't specified to skip those functions,
-    # run them. 
-    for name, func in ops_funcs_dict.items():
-        if name not in skip_list:
-            kwargs = func_kwargs.get(name, {})
-            mcdi_ibi_df_pp = func(mcdi_ibi_df_pp, word_col=word_col, **kwargs)
-
-    # run tests to ensure preprocessing was appropriately conducted
-    pp_checker(mcdi_ibi_df, mcdi_ibi_df_pp)
-
-    # organize dataframe to sort alphabetically by the primary word key and its alt forms
-    mcdi_ibi_pp_df = mcdi_ibi_df_pp.sort_values(by=[word_col, 'alt_forms'])
-
-    return mcdi_ibi_pp_df
-
 
 
 # ------------- 
@@ -346,7 +445,6 @@ def grammatical_generator(alt_forms_dict, skip_list=None):
     if skip_list is None:
         skip_list = []
 
-    # not my smartest code
     for base, alt_forms in alt_forms_dict.items():
         base_additions = set()
         for alt_form in alt_forms:

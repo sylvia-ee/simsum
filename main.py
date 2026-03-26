@@ -21,15 +21,20 @@ for sample, associated_dfs_dict in dfs_dict.items():
     ### 6. modify mcdi_ibi using df to apply all changes to dictionary, which essentially functions as a glossary
 
     mcdi_ibi = associated_dfs_dict["mcdi_ibi_df"] 
-    mcdi_ibi = mcdi_cleaner(mcdi_ibi) 
-    mcdi_alt_form_dict = create_alt_form_dict(mcdi_ibi, main_col='english_gloss', alt_col='alt_forms')
-    mcdi_alt_form_dict = manual_inclusions(mcdi_alt_form_dict, "/Users/se/Projects/semantic_summation/data/manual_preprocessing/inclusions_set1.csv")
-    mcdi_alt_form_dict = grammatical_generator(mcdi_alt_form_dict, skip_list=None)
-    mcdi_ibi = merge_mcdi_dict_into_mcdi_df(mcdi_ibi, mcdi_alt_form_dict)
+    mcdi_ibi = mcdi_ibi_setup(mcdi_ibi)
+
+    mcdi_ibi = exclude_cats(mcdi_ibi, "/Users/se/Projects/semantic_summation/data/manual_preprocessing/category-exclusions_set1.csv")
+    mcdi_ibi = exclude_words(mcdi_ibi, exclusion_funcs=[exclude_proper_nouns], csv_paths=["/Users/se/Projects/semantic_summation/data/manual_preprocessing/word-exclusions_set1.csv"])
+    mcdi_ibi = strip_syntax(mcdi_ibi)
+
+   # mcdi_alt_form_dict = create_alt_form_dict(mcdi_ibi, main_col='english_gloss', alt_col='alt_forms')
+    #mcdi_alt_form_dict = manual_inclusions(mcdi_alt_form_dict, "/Users/se/Projects/semantic_summation/data/manual_preprocessing/inclusions_set1.csv")
+    #mcdi_alt_form_dict = grammatical_generator(mcdi_alt_form_dict, skip_list=None)
+   # mcdi_ibi = merge_mcdi_dict_into_mcdi_df(mcdi_ibi, mcdi_alt_form_dict)
 
     # preprocess childes.csv
-    childes = associated_dfs_dict["childes_df"]
-    childes_tokens_dict = childes_cleaner(childes)
+    #childes = associated_dfs_dict["childes_df"]
+    #childes_tokens_dict = childes_cleaner(childes)
 
     
 
